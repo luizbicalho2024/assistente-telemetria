@@ -8,11 +8,15 @@ use App\Services\LegacyPasswordService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\RateLimiter;
+use Illuminate\Support\Str;
 use Illuminate\View\View;
 
 class AuthController extends Controller
 {
+    private const LOGIN_MAX_ATTEMPTS = 5;
+    private const LOGIN_DECAY_SECONDS = 300;
+
     public function show(): View|RedirectResponse
     {
         if (Auth::check()) {
@@ -32,6 +36,15 @@ class AuthController extends Controller
         ]);
 
         $login = mb_strtolower(trim($credentials['login']));
+        $throttleKey = $this->throttleKey($login, (string) $request->ip());
+
+        if (RateLimiter::tooManyAttempts($throttleKey, self::LOGIN_MAX_ATTEMPTS)) {
+            $seconds = RateLimiter::availableIn($throttleKey);
+            return back()
+                ->withErrors(['login' => "Muitas tentativas de acesso. Tente novamente em {$seconds} segundo(s)."])
+                ->onlyInput('login');
+        }
+
         $user = User::query()
             ->where(function ($query) use ($login) {
                 $query->where('username', $login)->orWhere('email', $login);
@@ -39,43 +52,24 @@ class AuthController extends Controller
             ->first();
 
         if (!$user || !$user->isActive() || !$passwords->verifyAndUpgrade($user, $credentials['password'])) {
-            return back()->withErrors(['login' => 'Usuário/e-mail ou senha inválidos.'])->onlyInput('login');
+            RateLimiter::hit($throttleKey, self::LOGIN_DECAY_SECONDS);
+            return back()
+                ->withErrors(['login' => 'Usuário/e-mail ou senha inválidos.'])
+                ->onlyInput('login');
         }
 
-        Auth::login($user, true);
+        RateLimiter::clear($throttleKey);
+        Auth::login($user, false);
         $request->session()->regenerate();
-        $user->forceFill(['last_login_at' => now()])->save();
+
+        $user->forceFill([
+            'last_login_at' => now(),
+            'remember_token' => null,
+        ])->save();
+
         $logger->log('Login realizado');
 
         return redirect()->intended(route('dashboard'));
-    }
-
-    public function bootstrap(Request $request, ActivityLogger $logger): RedirectResponse
-    {
-        abort_if(User::query()->count() > 0, 403);
-
-        $data = $request->validate([
-            'name' => ['required', 'string', 'max:120'],
-            'username' => ['required', 'string', 'min:3', 'max:80'],
-            'email' => ['required', 'email', 'max:160'],
-            'password' => ['required', 'string', 'min:8', 'confirmed'],
-        ]);
-
-        $user = User::query()->create([
-            'name' => trim($data['name']),
-            'username' => mb_strtolower(trim($data['username'])),
-            'email' => mb_strtolower(trim($data['email'])),
-            'password' => Hash::make($data['password']),
-            'role' => 'admin',
-            'active' => true,
-            'disabled' => false,
-        ]);
-
-        Auth::login($user, true);
-        $request->session()->regenerate();
-        $logger->log('Primeiro administrador criado');
-
-        return redirect()->route('dashboard');
     }
 
     public function logout(Request $request, ActivityLogger $logger): RedirectResponse
@@ -89,5 +83,10 @@ class AuthController extends Controller
         $request->session()->regenerateToken();
 
         return redirect()->route('login');
+    }
+
+    private function throttleKey(string $login, string $ip): string
+    {
+        return 'login:'.Str::lower(Str::transliterate($login)).'|'.$ip;
     }
 }

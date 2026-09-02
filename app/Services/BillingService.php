@@ -25,6 +25,16 @@ class BillingService
         $headerRow = $this->sheets->findHeaderRow($rows);
         $data = $this->sheets->rowsWithHeaders($rows, $headerRow);
         $reportDate = $this->extractReportDate($rows) ?? now()->toImmutable();
+        $periodKey = $reportDate->format('Y-m');
+
+        $closure = BillingMonthClosure::query()
+            ->where('period_key', $periodKey)
+            ->where('status', 'closed')
+            ->first();
+
+        if ($closure) {
+            throw new \RuntimeException("A competência {$periodKey} está fechada e não pode ser reprocessada.");
+        }
 
         $aliases = [
             'equipamento' => 'Nº Equipamento',
@@ -156,7 +166,6 @@ class BillingService
             ];
         }
 
-        $periodKey = $reportDate->format('Y-m');
         $periodLabel = $this->periodLabel($reportDate);
         $summaries = [];
 
@@ -262,7 +271,20 @@ class BillingService
 
     public function closeMonth(string $periodKey, string $user): BillingMonthClosure
     {
+        $existing = BillingMonthClosure::query()
+            ->where('period_key', $periodKey)
+            ->where('status', 'closed')
+            ->first();
+
+        if ($existing) {
+            return $existing;
+        }
+
         $metrics = BillingMonthlyMetric::query()->where('period_key', $periodKey)->get();
+        if ($metrics->isEmpty()) {
+            throw new \RuntimeException('Não é possível fechar uma competência sem métricas de faturamento.');
+        }
+
         $payload = [
             'period_key' => $periodKey,
             'periodo_relatorio' => $metrics->first()?->periodo_relatorio ?? $periodKey,
@@ -275,11 +297,6 @@ class BillingService
             'schema_version' => 2,
         ];
 
-        $existing = BillingMonthClosure::query()->where('period_key', $periodKey)->first();
-        if ($existing) {
-            $existing->fill($payload)->save();
-            return $existing;
-        }
         return BillingMonthClosure::query()->create($payload);
     }
 

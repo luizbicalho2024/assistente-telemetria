@@ -12,7 +12,22 @@ class User extends Authenticatable
 
     protected $connection = 'mongodb';
     protected $table = 'users';
-    protected $guarded = [];
+
+    protected $fillable = [
+        'name',
+        'username',
+        'email',
+        'password',
+        'hashed_password',
+        'password_hash',
+        'role',
+        'active',
+        'disabled',
+        'permissions',
+        'last_login_at',
+        'remember_token',
+    ];
+
     protected $hidden = [
         'password',
         'hashed_password',

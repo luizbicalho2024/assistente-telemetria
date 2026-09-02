@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\Role;
+use App\Services\AccessService;
 use App\Services\ActivityLogger;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -48,32 +49,47 @@ class RoleController extends Controller
         ]);
     }
 
-    public function store(Request $request, ActivityLogger $logger): RedirectResponse
+    public function store(Request $request, ActivityLogger $logger, AccessService $access): RedirectResponse
     {
         $data = $request->validate([
             'slug' => ['required','regex:/^[a-z0-9_]+$/','max:80'],
             'name' => ['required','string','max:120'],
-            'permissions' => ['nullable','array'],
-            'permissions.*' => ['string'],
+            'permissions' => ['nullable','array','max:200'],
+            'permissions.*' => ['string','max:120'],
         ]);
 
-        $allowed = array_keys(config('modules.modules', []));
-        $permissions = array_values(array_intersect($data['permissions'] ?? [], $allowed));
+        $actor = $request->user();
+        $slug = (string) $data['slug'];
 
-        $role = Role::query()->where('slug', $data['slug'])->first();
+        if ($slug === 'admin' && $actor->normalizedRole() !== 'admin') {
+            abort(403, 'Apenas administradores podem alterar o perfil de administrador.');
+        }
+
+        $allowed = array_keys(config('modules.modules', []));
+        $permissions = array_values(array_unique(array_intersect($data['permissions'] ?? [], $allowed)));
+
+        if ($actor->normalizedRole() !== 'admin') {
+            foreach ($permissions as $permission) {
+                abort_if(!$access->can($actor, $permission), 403, 'Você não pode conceder permissões superiores às suas.');
+            }
+        }
+
+        $role = Role::query()->where('slug', $slug)->first();
         $payload = [
-            'slug' => $data['slug'],
+            'slug' => $slug,
             'name' => trim($data['name']),
-            'permissions' => $data['slug'] === 'admin' ? ['*'] : $permissions,
-            'system' => in_array($data['slug'], array_keys(config('modules.defaults', [])), true),
+            'permissions' => $slug === 'admin' ? ['*'] : $permissions,
+            'system' => in_array($slug, array_keys(config('modules.defaults', [])), true),
         ];
+
         if ($role) {
             $role->fill($payload)->save();
         } else {
             Role::query()->create($payload);
         }
 
-        $logger->log('Perfil atualizado', ['role' => $data['slug'], 'permissions' => $payload['permissions']]);
+        $logger->log('Perfil atualizado', ['role' => $slug, 'permissions' => $payload['permissions']]);
+
         return back()->with('success', 'Perfil salvo.');
     }
 }

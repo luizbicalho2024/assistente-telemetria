@@ -1,14 +1,16 @@
 services:
   mongo:
-    image: mongo:8.0
+    image: mongo:8.0.29
     container_name: assistente-telemetria-mongo
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     environment:
-      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:-root}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-TroqueRootMongo123!}
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:?Defina MONGO_ROOT_USERNAME no .env}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?Defina MONGO_ROOT_PASSWORD no .env}
       MONGO_APP_DATABASE: ${MONGODB_DATABASE:-assistente_telemetria}
-      MONGO_APP_USER: ${MONGO_APP_USER:-assistente}
-      MONGO_APP_PASSWORD: ${MONGO_APP_PASSWORD:-TroqueMongoAgora123!}
+      MONGO_APP_USER: ${MONGO_APP_USER:?Defina MONGO_APP_USER no .env}
+      MONGO_APP_PASSWORD: ${MONGO_APP_PASSWORD:?Defina MONGO_APP_PASSWORD no .env}
     volumes:
       - mongo_data:/data/db
       - ./docker/mongo-init.js:/docker-entrypoint-initdb.d/01-app-user.js:ro
@@ -31,31 +33,42 @@ services:
       dockerfile: Dockerfile
     container_name: assistente-telemetria-app
     restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       mongo:
         condition: service_healthy
     ports:
-      - "${APP_PORT:-8080}:80"
+      - "${APP_BIND_IP:-127.0.0.1}:${APP_PORT:-8080}:80"
     environment:
       APP_NAME: ${APP_NAME:-Assistente Telemetria}
       APP_ENV: ${APP_ENV:-production}
       APP_DEBUG: ${APP_DEBUG:-false}
-      APP_URL: ${APP_URL:-http://localhost:8080}
-      APP_KEY: ${APP_KEY:-}
+      APP_URL: ${APP_URL:-http://127.0.0.1:8080}
+      APP_KEY: ${APP_KEY:?Defina APP_KEY no .env}
       APP_TIMEZONE: ${APP_TIMEZONE:-America/Sao_Paulo}
+      LOG_CHANNEL: ${LOG_CHANNEL:-stack}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
       DB_CONNECTION: mongodb
-      MONGODB_URI: "mongodb://${MONGO_APP_USER:-assistente}:${MONGO_APP_PASSWORD:-TroqueMongoAgora123!}@mongo:27017/${MONGODB_DATABASE:-assistente_telemetria}?authSource=${MONGODB_DATABASE:-assistente_telemetria}"
+      MONGODB_URI: "mongodb://${MONGO_APP_USER:?Defina MONGO_APP_USER}:${MONGO_APP_PASSWORD:?Defina MONGO_APP_PASSWORD}@mongo:27017/${MONGODB_DATABASE:-assistente_telemetria}?authSource=${MONGODB_DATABASE:-assistente_telemetria}"
       MONGODB_DATABASE: ${MONGODB_DATABASE:-assistente_telemetria}
       SESSION_DRIVER: file
+      SESSION_LIFETIME: ${SESSION_LIFETIME:-120}
+      SESSION_SECURE_COOKIE: ${SESSION_SECURE_COOKIE:-false}
+      SESSION_HTTP_ONLY: "true"
+      SESSION_SAME_SITE: ${SESSION_SAME_SITE:-lax}
       CACHE_STORE: file
       QUEUE_CONNECTION: sync
       ADMIN_NAME: ${ADMIN_NAME:-Administrador}
-      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
-      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@localhost}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-TroqueEstaSenha123!}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:?Defina ADMIN_USERNAME no .env}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?Defina ADMIN_EMAIL no .env}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Defina ADMIN_PASSWORD no .env}
       TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
       TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
       TWILIO_PHONE_NUMBER: ${TWILIO_PHONE_NUMBER:-}
+    tmpfs:
+      - /tmp:size=64m,mode=1777
     networks:
       - assistente
 

@@ -2,7 +2,6 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\InventoryItem;
 use App\Models\Tracker;
 use App\Services\ActivityLogger;
 use App\Services\SpreadsheetService;
@@ -15,6 +14,7 @@ class InventoryController extends Controller
     public function index(Request $request): View
     {
         $query = Tracker::query()->orderBy('Modelo', 'asc');
+
         if ($request->filled('q')) {
             $term = trim((string) $request->query('q'));
             $query->where(function ($q) use ($term) {
@@ -23,18 +23,22 @@ class InventoryController extends Controller
                     ->orWhere('Tipo', 'like', "%{$term}%");
             });
         }
+
         return view('inventory.index', ['items' => $query->limit(1500)->get()]);
     }
 
     public function import(Request $request, SpreadsheetService $sheets, ActivityLogger $logger): RedirectResponse
     {
-        $request->validate(['file' => ['required','file','mimes:xlsx,xls,csv','max:30720']]);
+        $request->validate([
+            'file' => ['required','file','mimes:xlsx,xls,csv','max:15360'],
+        ]);
+
         $rows = $sheets->read($request->file('file'));
         if (!$rows) {
             return back()->withErrors(['file' => 'Planilha vazia.']);
         }
 
-        $headerIndex = 0;
+        $headerIndex = null;
         foreach (array_slice($rows, 0, 60, true) as $index => $candidate) {
             $keys = array_map(fn ($v) => $sheets->canonical((string) $v), $candidate);
             if (array_intersect($keys, ['equipamento', 'n equipamento', 'numero equipamento'])) {
@@ -42,7 +46,17 @@ class InventoryController extends Controller
                 break;
             }
         }
-        $headers = array_map(fn ($v) => trim((string) $v), $rows[$headerIndex]);
+
+        if ($headerIndex === null) {
+            return back()->withErrors(['file' => 'Não foi possível localizar a coluna de equipamento.']);
+        }
+
+        $headers = $sheets->sanitizeHeaders(
+            $rows[$headerIndex],
+            ['_id', 'id', 'created_at', 'updated_at']
+        );
+
+        $processed = 0;
         foreach (array_slice($rows, $headerIndex + 1) as $row) {
             $data = [];
             foreach ($headers as $i => $header) {
@@ -56,16 +70,29 @@ class InventoryController extends Controller
                 continue;
             }
 
+            $equipment = preg_replace('/\.0$/', '', $equipment) ?? $equipment;
+            if (mb_strlen($equipment) > 120) {
+                continue;
+            }
+
             $existing = Tracker::query()->where('Nº Equipamento', $equipment)->first();
-            $payload = $data + ['Nº Equipamento' => preg_replace('/\.0$/', '', $equipment)];
+            $payload = $data;
+            $payload['Nº Equipamento'] = $equipment;
+
             if ($existing) {
                 $existing->fill($payload)->save();
             } else {
                 Tracker::query()->create($payload);
             }
+
+            $processed++;
         }
 
-        $logger->log('Estoque importado', ['arquivo' => $request->file('file')->getClientOriginalName()]);
-        return back()->with('success', 'Estoque importado/atualizado.');
+        $logger->log('Estoque importado', [
+            'arquivo' => $request->file('file')->getClientOriginalName(),
+            'registros' => $processed,
+        ]);
+
+        return back()->with('success', "Estoque importado/atualizado: {$processed} registro(s).");
     }
 }

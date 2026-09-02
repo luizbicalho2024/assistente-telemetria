@@ -33,26 +33,10 @@
                 <button class="button primary full" type="submit">Entrar</button>
             </form>
         @else
-            <div class="alert info">Nenhum usuário encontrado. Crie o primeiro administrador.</div>
-            <form method="post" action="{{ route('bootstrap.admin') }}" class="stack">
-                @csrf
-                <label>Nome
-                    <input type="text" name="name" value="{{ old('name', 'Administrador') }}" required>
-                </label>
-                <label>Usuário
-                    <input type="text" name="username" value="{{ old('username', 'admin') }}" required>
-                </label>
-                <label>E-mail
-                    <input type="email" name="email" value="{{ old('email') }}" required>
-                </label>
-                <label>Senha
-                    <input type="password" name="password" minlength="8" required>
-                </label>
-                <label>Confirmar senha
-                    <input type="password" name="password_confirmation" minlength="8" required>
-                </label>
-                <button class="button primary full" type="submit">Criar administrador</button>
-            </form>
+            <div class="alert info">
+                Nenhum administrador foi provisionado. Por segurança, a criação do primeiro administrador não é exposta pela Web.
+                Configure ADMIN_USERNAME, ADMIN_EMAIL e ADMIN_PASSWORD no ambiente e execute <strong>php artisan app:bootstrap</strong>.
+            </div>
         @endif
     </div>
 </div>

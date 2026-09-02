@@ -27,14 +27,24 @@ class FinanceController extends Controller
     {
         $request->validate([
             'files' => ['required','array','min:1','max:24'],
-            'files.*' => ['required','file','mimes:xlsx,xls,csv','max:51200'],
+            'files.*' => ['required','file','mimes:xlsx,xls,csv','max:15360'],
         ]);
+
+        $files = $request->file('files', []);
+        $aggregateBytes = array_sum(array_map(
+            fn ($file) => max(0, (int) ($file->getSize() ?: 0)),
+            $files
+        ));
+
+        if ($aggregateBytes > 100 * 1024 * 1024) {
+            return back()->withErrors(['files' => 'O conjunto de arquivos excede o limite seguro de 100 MB por processamento.']);
+        }
 
         $results = [];
         $failures = [];
         $user = $request->user()->username ?? $request->user()->email ?? 'sistema';
 
-        foreach ($request->file('files', []) as $file) {
+        foreach ($files as $file) {
             try {
                 $result = $billing->importAndCalculate($file, $user);
                 $results[] = $result + ['file' => $file->getClientOriginalName()];
@@ -46,17 +56,20 @@ class FinanceController extends Controller
                 ]);
             } catch (\Throwable $e) {
                 report($e);
-                $failures[] = $file->getClientOriginalName().': '.$e->getMessage();
+                $failures[] = $file->getClientOriginalName();
             }
         }
 
         if (!$results) {
-            return back()->withErrors(['files' => 'Nenhum arquivo foi processado. '.implode(' | ', $failures)]);
+            return back()->withErrors([
+                'files' => 'Nenhum arquivo foi processado. Consulte os logs administrativos para o diagnóstico técnico. Arquivos com falha: '.implode(', ', $failures),
+            ]);
         }
 
         $periods = collect($results)->pluck('period_label')->unique()->implode(', ');
         $clients = collect($results)->sum('clients');
         $total = collect($results)->sum('total');
+
         $message = sprintf(
             '%d arquivo(s) processado(s) [%s]: %d registros de clientes, total R$ %s.',
             count($results),
@@ -64,8 +77,9 @@ class FinanceController extends Controller
             $clients,
             number_format((float) $total, 2, ',', '.')
         );
+
         if ($failures) {
-            $message .= ' Falhas: '.implode(' | ', $failures);
+            $message .= ' Arquivos não processados: '.implode(', ', $failures).'. Consulte os logs.';
         }
 
         return back()->with('success', $message);
@@ -73,9 +87,10 @@ class FinanceController extends Controller
 
     public function closeBilling(Request $request, BillingService $billing, ActivityLogger $logger): RedirectResponse
     {
-        $data = $request->validate(['period_key' => ['required','regex:/^\d{4}-\d{2}$/']]);
+        $data = $request->validate(['period_key' => ['required','regex:/^\d{4}-(0[1-9]|1[0-2])$/']]);
         $closure = $billing->closeMonth($data['period_key'], $request->user()->username ?? $request->user()->email ?? 'sistema');
         $logger->log('Mês de faturamento fechado', ['period_key' => $closure->period_key]);
+
         return back()->with('success', 'Mês fechado com sucesso.');
     }
 
@@ -160,6 +175,7 @@ class FinanceController extends Controller
             'atualizado_em' => now()->format('Y-m-d H:i:s'),
             'updated_by' => $request->user()->username ?? $request->user()->email,
         ];
+
         if ($existing) {
             $existing->fill($payload)->save();
         } else {

@@ -18,12 +18,15 @@ class TrackerCommandService
 
     private function st300(array $d): array
     {
-        $serial = trim((string) ($d['serial'] ?? ''));
-        if ($serial === '') {
-            throw new \InvalidArgumentException('Informe o serial.');
-        }
+        $serial = $this->protocolValue($d['serial'] ?? '', 'serial', 40, true);
+        $apn = $this->protocolValue($d['apn'] ?? 'allcom.claro.com.br', 'APN', 100, true);
+        $user = $this->protocolValue($d['apn_user'] ?? 'allcom', 'usuário APN', 80);
+        $password = $this->protocolValue($d['apn_password'] ?? 'allcom', 'senha APN', 80);
+        $host = $this->host($d['host'] ?? '54.94.190.167');
+        $port = $this->port($d['port'] ?? 9601);
+
         return [
-            'Configurar rede' => "ST300NTW;{$serial};02;1;".($d['apn'] ?? 'allcom.claro.com.br').';'.($d['apn_user'] ?? 'allcom').';'.($d['apn_password'] ?? 'allcom').';'.($d['host'] ?? '54.94.190.167').';'.($d['port'] ?? '9601').';;;',
+            'Configurar rede' => "ST300NTW;{$serial};02;1;{$apn};{$user};{$password};{$host};{$port};;;",
             'Solicitar posição atual' => "ST300CMD;{$serial};02;StatusReq",
             'Reiniciar equipamento' => "ST300RST;{$serial};02;Reboot",
             'Ativar saída 1 — bloqueio' => "ST300OUT;{$serial};02;Enable1",
@@ -33,13 +36,11 @@ class TrackerCommandService
 
     private function st390(array $d): array
     {
-        $serial = trim((string) ($d['serial'] ?? ''));
-        if ($serial === '') {
-            throw new \InvalidArgumentException('Informe o serial.');
-        }
-        $apn = $d['apn'] ?? 'allcom.claro.com.br';
-        $host = $d['host'] ?? '54.94.190.167';
-        $port = $d['port'] ?? '9601';
+        $serial = $this->protocolValue($d['serial'] ?? '', 'serial', 40, true);
+        $apn = $this->protocolValue($d['apn'] ?? 'allcom.claro.com.br', 'APN', 100, true);
+        $host = $this->host($d['host'] ?? '54.94.190.167');
+        $port = $this->port($d['port'] ?? 9601);
+
         return [
             'Configurar APN' => "ST400CMD;{$serial};;{$apn};1",
             'Configurar IP e porta' => "ST400CMD;{$serial};;{$host};{$port};{$host};{$port}",
@@ -54,15 +55,24 @@ class TrackerCommandService
         }
 
         $authMap = ['CHAP'=>'01','PAP'=>'00','AUTOMATICO'=>'02','AUTOMÁTICO'=>'02','SEM'=>'03'];
-        $auth = $authMap[strtoupper((string) ($d['auth'] ?? 'CHAP'))] ?? '01';
-        $apn = $d['apn'] ?? 'conexao.getrak.com';
-        $user = $d['apn_user'] ?? '';
-        $password = $d['apn_password'] ?? '';
-        $host = $d['host'] ?? 'st4315.getrak.com.br';
-        $port = $d['port'] ?? '13018';
-        $speed = max(0, (int) ($d['speed'] ?? 110));
-        $high = (int) ($d['high_voltage'] ?? 132);
-        $low = (int) ($d['low_voltage'] ?? 128);
+        $authName = strtoupper(trim((string) ($d['auth'] ?? 'CHAP')));
+        if (!array_key_exists($authName, $authMap)) {
+            throw new \InvalidArgumentException('Método de autenticação inválido.');
+        }
+
+        $auth = $authMap[$authName];
+        $apn = $this->protocolValue($d['apn'] ?? 'conexao.getrak.com', 'APN', 100, true);
+        $user = $this->protocolValue($d['apn_user'] ?? '', 'usuário APN', 80);
+        $password = $this->protocolValue($d['apn_password'] ?? '', 'senha APN', 80);
+        $host = $this->host($d['host'] ?? 'st4315.getrak.com.br');
+        $port = $this->port($d['port'] ?? 13018);
+        $speed = max(0, min(300, (int) ($d['speed'] ?? 110)));
+        $high = max(0, min(1000, (int) ($d['high_voltage'] ?? 132)));
+        $low = max(0, min(1000, (int) ($d['low_voltage'] ?? 128)));
+
+        if ($high < $low) {
+            throw new \InvalidArgumentException('A tensão de ligar não pode ser menor que a tensão de desligar.');
+        }
 
         return [
             'Configurar APN' => "PRG;{$esn};10;00#{$auth};01#{$apn};02#{$user};03#{$password}",
@@ -90,5 +100,53 @@ class TrackerCommandService
             'Configuração moto 4' => "PRG;{$esn};17;01#120",
             'Configuração moto 5' => "PRG;{$esn};16;70#0",
         ];
+    }
+
+    private function protocolValue(mixed $value, string $field, int $maxLength, bool $required = false): string
+    {
+        $value = trim((string) $value);
+
+        if ($required && $value === '') {
+            throw new \InvalidArgumentException("Informe {$field}.");
+        }
+
+        if (mb_strlen($value) > $maxLength) {
+            throw new \InvalidArgumentException("O campo {$field} excede o tamanho permitido.");
+        }
+
+        if (preg_match('/[;#\x00-\x1F\x7F]/u', $value)) {
+            throw new \InvalidArgumentException("O campo {$field} contém caracteres reservados do protocolo.");
+        }
+
+        return $value;
+    }
+
+    private function host(mixed $value): string
+    {
+        $host = $this->protocolValue($value, 'host', 180, true);
+
+        if (filter_var($host, FILTER_VALIDATE_IP)) {
+            return $host;
+        }
+
+        if (!preg_match('/^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/', $host)) {
+            throw new \InvalidArgumentException('Host/IP inválido.');
+        }
+
+        return $host;
+    }
+
+    private function port(mixed $value): int
+    {
+        if (!is_numeric($value)) {
+            throw new \InvalidArgumentException('Porta inválida.');
+        }
+
+        $port = (int) $value;
+        if ($port < 1 || $port > 65535) {
+            throw new \InvalidArgumentException('A porta deve estar entre 1 e 65535.');
+        }
+
+        return $port;
     }
 }
