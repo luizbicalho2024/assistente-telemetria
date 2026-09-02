@@ -1,4 +1,4 @@
-FROM php:8.4.25-apache-bookworm
+FROM php:8.5.10-apache-bookworm
 
 ARG MONGODB_EXTENSION_VERSION=2.4.1
 ARG INSTALL_DEV=false
