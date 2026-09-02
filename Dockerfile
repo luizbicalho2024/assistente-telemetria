@@ -1,0 +1,48 @@
+FROM php:8.4-apache-bookworm
+
+ENV COMPOSER_ALLOW_SUPERUSER=1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates curl git unzip \
+        libicu-dev libzip-dev libpng-dev libjpeg62-turbo-dev libfreetype6-dev \
+        libonig-dev libxml2-dev libssl-dev libcurl4-openssl-dev pkg-config \
+    && docker-php-ext-configure gd --with-freetype --with-jpeg \
+    && docker-php-ext-install -j"$(nproc)" curl intl zip gd mbstring dom simplexml xml xmlreader xmlwriter \
+    && pecl install mongodb \
+    && docker-php-ext-enable mongodb \
+    && a2enmod rewrite headers expires \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+COPY docker/apache.conf /etc/apache2/sites-available/000-default.conf
+
+WORKDIR /var/www/html
+COPY . .
+
+# Laravel precisa destes diretorios antes do composer install porque
+# post-autoload-dump executa `php artisan package:discover`.
+RUN mkdir -p \
+        bootstrap/cache \
+        storage/framework/cache/data \
+        storage/framework/sessions \
+        storage/framework/views \
+        storage/logs \
+    && chmod -R ug+rwx storage bootstrap/cache \
+    && composer install \
+      --no-dev \
+      --no-interaction \
+      --no-progress \
+      --prefer-dist \
+      --optimize-autoloader \
+    && chown -R www-data:www-data storage bootstrap/cache \
+    && chmod -R ug+rwx storage bootstrap/cache \
+    && chmod +x /var/www/html/docker/entrypoint.sh
+
+EXPOSE 80
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=5 \
+    CMD curl -fsS http://127.0.0.1/up || exit 1
+
+ENTRYPOINT ["/var/www/html/docker/entrypoint.sh"]
+CMD ["apache2-foreground"]
