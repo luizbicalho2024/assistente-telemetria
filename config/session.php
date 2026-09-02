@@ -4,9 +4,9 @@ use Illuminate\Support\Str;
 
 return [
     'driver' => env('SESSION_DRIVER', 'file'),
-    'lifetime' => (int) env('SESSION_LIFETIME', 480),
+    'lifetime' => (int) env('SESSION_LIFETIME', 120),
     'expire_on_close' => false,
-    'encrypt' => false,
+    'encrypt' => true,
     'files' => storage_path('framework/sessions'),
     'connection' => env('SESSION_CONNECTION'),
     'table' => 'sessions',
@@ -15,8 +15,8 @@ return [
     'cookie' => env('SESSION_COOKIE', Str::slug((string) env('APP_NAME', 'assistente-telemetria')).'-session'),
     'path' => '/',
     'domain' => env('SESSION_DOMAIN'),
-    'secure' => env('SESSION_SECURE_COOKIE'),
+    'secure' => filter_var(env('SESSION_SECURE_COOKIE', false), FILTER_VALIDATE_BOOL),
     'http_only' => true,
-    'same_site' => 'lax',
+    'same_site' => env('SESSION_SAME_SITE', 'lax'),
     'partitioned' => false,
 ];

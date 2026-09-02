@@ -5,9 +5,10 @@ namespace App\Http\Controllers;
 use App\Models\Proposal;
 use App\Services\ActivityLogger;
 use App\Services\PricingService;
-use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
+use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
 
 class SimulatorController extends Controller
@@ -19,21 +20,32 @@ class SimulatorController extends Controller
 
     public function calculatePj(Request $request, PricingService $pricing, ActivityLogger $logger): View
     {
+        $config = $pricing->config();
+        $validPlans = array_keys($config['PLANOS_PJ'] ?? []);
+
         $data = $request->validate([
             'empresa' => ['required', 'string', 'max:180'],
             'consultor' => ['nullable', 'string', 'max:120'],
-            'plan' => ['required', 'string'],
-            'product' => ['required', 'string'],
+            'plan' => ['required', Rule::in($validPlans)],
+            'product' => ['required', 'string', 'max:180'],
             'vehicles' => ['required', 'integer', 'min:1', 'max:100000'],
             'months' => ['required', 'integer', 'min:1', 'max:120'],
-            'sale_price' => ['required', 'numeric', 'min:0'],
-            'installation_sale' => ['nullable', 'numeric', 'min:0'],
+            'sale_price' => ['required', 'numeric', 'min:0', 'max:10000000'],
+            'installation_sale' => ['nullable', 'numeric', 'min:0', 'max:10000000'],
             'charge_installation' => ['nullable', 'boolean'],
         ]);
 
-        $config = $pricing->config();
         $plan = $data['plan'];
         $product = $data['product'];
+
+        $knownByPlan = array_key_exists($product, $config['PLANOS_PJ'][$plan] ?? []);
+        $knownByCosts = array_key_exists($product, $config['CUSTOS_PJ'][$plan] ?? []);
+        if (!$knownByPlan && !$knownByCosts) {
+            throw ValidationException::withMessages([
+                'product' => 'Produto inválido para o plano selecionado.',
+            ]);
+        }
+
         $months = (int) $data['months'];
         $vehicles = (int) $data['vehicles'];
 
@@ -93,19 +105,27 @@ class SimulatorController extends Controller
 
     public function calculatePf(Request $request, PricingService $pricing, ActivityLogger $logger): View
     {
+        $config = $pricing->config();
+
         $data = $request->validate([
             'cliente' => ['required', 'string', 'max:180'],
-            'product' => ['required', 'string'],
+            'product' => ['required', Rule::in(array_keys($config['PRECOS_PF'] ?? []))],
             'quantity' => ['required', 'integer', 'min:1', 'max:1000'],
             'installments' => ['required', 'integer', 'min:1', 'max:12'],
         ]);
 
-        $config = $pricing->config();
-        $base = (float) ($config['PRECOS_PF'][$data['product']] ?? 0);
-        $fee = (float) ($config['TAXAS_PARCELAMENTO_PF'][(string) $data['installments']] ?? 0);
+        $installments = (int) $data['installments'];
+        if ($installments !== 1 && !array_key_exists((string) $installments, $config['TAXAS_PARCELAMENTO_PF'] ?? [])) {
+            throw ValidationException::withMessages([
+                'installments' => 'Quantidade de parcelas não configurada.',
+            ]);
+        }
+
+        $base = (float) $config['PRECOS_PF'][$data['product']];
+        $fee = $installments === 1 ? 0.0 : (float) $config['TAXAS_PARCELAMENTO_PF'][(string) $installments];
         $subtotal = $base * (int) $data['quantity'];
         $total = round($subtotal * (1 + $fee), 2);
-        $installment = round($total / max(1, (int) $data['installments']), 2);
+        $installment = round($total / max(1, $installments), 2);
 
         $result = compact('base', 'fee', 'subtotal', 'total', 'installment') + $data;
 
@@ -120,6 +140,7 @@ class SimulatorController extends Controller
             'financial_snapshot' => $result,
             'data_geracao' => now(),
         ]);
+
         $logger->log('Simulação PF gerada', ['cliente' => $data['cliente'], 'total' => $total]);
 
         return view('simulators.pf', compact('config', 'result'));
@@ -132,16 +153,17 @@ class SimulatorController extends Controller
 
     public function calculateLicitacao(Request $request, PricingService $pricing, ActivityLogger $logger): View
     {
+        $config = $pricing->config();
+
         $data = $request->validate([
             'orgao' => ['required', 'string', 'max:180'],
-            'product' => ['required', 'string'],
+            'product' => ['required', Rule::in(array_keys($config['PRECO_CUSTO_LICITACAO'] ?? []))],
             'quantity' => ['required', 'integer', 'min:1', 'max:100000'],
-            'sale_price' => ['required', 'numeric', 'min:0'],
+            'sale_price' => ['required', 'numeric', 'min:0', 'max:10000000'],
             'months' => ['required', 'integer', 'min:1', 'max:120'],
         ]);
 
-        $config = $pricing->config();
-        $unitCost = (float) ($config['PRECO_CUSTO_LICITACAO'][$data['product']] ?? 0);
+        $unitCost = (float) $config['PRECO_CUSTO_LICITACAO'][$data['product']];
         $quantity = (int) $data['quantity'];
         $months = (int) $data['months'];
         $totalRevenue = round((float) $data['sale_price'] * $quantity * $months, 2);
@@ -161,6 +183,7 @@ class SimulatorController extends Controller
             'financial_snapshot' => $result,
             'data_geracao' => now(),
         ]);
+
         $logger->log('Simulação de licitação gerada', ['orgao' => $data['orgao']]);
 
         return view('simulators.licitacao', compact('config', 'result'));

@@ -16,8 +16,9 @@ use Illuminate\Support\Facades\Route;
 
 Route::middleware('guest')->group(function () {
     Route::get('/login', [AuthController::class, 'show'])->name('login');
-    Route::post('/login', [AuthController::class, 'login'])->name('login.perform');
-    Route::post('/bootstrap-admin', [AuthController::class, 'bootstrap'])->name('bootstrap.admin');
+    Route::post('/login', [AuthController::class, 'login'])
+        ->middleware('throttle:20,1')
+        ->name('login.perform');
 });
 
 Route::middleware('auth')->group(function () {
@@ -54,19 +55,27 @@ Route::middleware('auth')->group(function () {
 
     Route::middleware('permission:estoque')->group(function () {
         Route::get('/estoque', [InventoryController::class, 'index'])->name('inventory.index');
-        Route::post('/estoque/importar', [InventoryController::class, 'import'])->name('inventory.import');
+        Route::post('/estoque/importar', [InventoryController::class, 'import'])
+            ->middleware('throttle:6,1')
+            ->name('inventory.import');
     });
 
     Route::middleware('permission:comandos')->group(function () {
         Route::get('/comandos-rastreadores', [TrackerController::class, 'commands'])->name('trackers.commands');
-        Route::post('/comandos-rastreadores', [TrackerController::class, 'generate'])->name('trackers.generate');
-        Route::post('/comandos-rastreadores/sms', [TrackerController::class, 'sendSms'])->name('trackers.sms');
+        Route::post('/comandos-rastreadores', [TrackerController::class, 'generate'])
+            ->middleware('throttle:30,1')
+            ->name('trackers.generate');
+        Route::post('/comandos-rastreadores/sms', [TrackerController::class, 'sendSms'])
+            ->middleware('throttle:20,1')
+            ->name('trackers.sms');
     });
 
     Route::get('/financeiro/sugesp', [FinanceController::class, 'sugesp'])->middleware('permission:financeiro.sugesp')->name('finance.sugesp');
     Route::middleware('permission:financeiro.faturamento')->group(function () {
         Route::get('/financeiro/faturamento', [FinanceController::class, 'billing'])->name('finance.billing');
-        Route::post('/financeiro/faturamento/processar', [FinanceController::class, 'processBilling'])->name('finance.billing.process');
+        Route::post('/financeiro/faturamento/processar', [FinanceController::class, 'processBilling'])
+            ->middleware('throttle:4,1')
+            ->name('finance.billing.process');
         Route::post('/financeiro/faturamento/fechar', [FinanceController::class, 'closeBilling'])->name('finance.billing.close');
     });
     Route::get('/financeiro/parceiros', [FinanceController::class, 'partners'])->middleware('permission:financeiro.parceiros')->name('finance.partners');

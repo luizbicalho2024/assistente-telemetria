@@ -10,11 +10,12 @@ use App\Services\PricingService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Hash;
 use MongoDB\Client;
+use RuntimeException;
 use Throwable;
 
 class BootstrapApplication extends Command
 {
-    protected $signature = 'app:bootstrap {--force-admin : Atualiza a senha do administrador informado no .env}';
+    protected $signature = 'app:bootstrap {--force-admin : Atualiza a senha do administrador informado no ambiente}';
     protected $description = 'Cria índices, perfis, configuração padrão e primeiro administrador.';
 
     public function handle(PricingService $pricing): int
@@ -33,8 +34,8 @@ class BootstrapApplication extends Command
     private function ensureIndexes(): void
     {
         try {
-            $client = new Client((string) env('MONGODB_URI', 'mongodb://mongo:27017'));
-            $db = $client->selectDatabase((string) env('MONGODB_DATABASE', 'assistente_telemetria'));
+            $client = new Client((string) config('database.connections.mongodb.dsn'));
+            $db = $client->selectDatabase((string) config('database.connections.mongodb.database'));
 
             $specs = [
                 'users' => [
@@ -137,12 +138,19 @@ class BootstrapApplication extends Command
         $username = mb_strtolower(trim((string) env('ADMIN_USERNAME', 'admin')));
         $password = (string) env('ADMIN_PASSWORD', '');
 
+        $existing = User::query()->where('username', $username)->orWhere('email', $email)->first();
+
         if ($password === '') {
-            $this->warn('ADMIN_PASSWORD vazio. O administrador poderá ser criado pelo formulário do primeiro acesso.');
-            return;
+            if ($existing) {
+                $this->warn('ADMIN_PASSWORD vazio; administrador existente foi preservado sem alteração de senha.');
+                return;
+            }
+
+            throw new RuntimeException('ADMIN_PASSWORD é obrigatório para criar o primeiro administrador. A criação pela Web foi desabilitada.');
         }
 
-        $existing = User::query()->where('username', $username)->orWhere('email', $email)->first();
+        $this->assertStrongPassword($password);
+
         if ($existing) {
             if ($this->option('force-admin')) {
                 $existing->fill([
@@ -152,6 +160,7 @@ class BootstrapApplication extends Command
                     'password' => Hash::make($password),
                     'hashed_password' => null,
                     'password_hash' => null,
+                    'remember_token' => null,
                 ])->save();
                 $this->info("Administrador {$username} atualizado.");
             }
@@ -167,6 +176,27 @@ class BootstrapApplication extends Command
             'active' => true,
             'disabled' => false,
         ]);
+
         $this->info("Administrador {$username} criado.");
+    }
+
+    private function assertStrongPassword(string $password): void
+    {
+        $forbidden = [
+            'Troque'.'EstaSenha123!',
+            'admin',
+            'password',
+            '12345678',
+            '123456789',
+        ];
+
+        if (in_array($password, $forbidden, true)
+            || strlen($password) < 12
+            || !preg_match('/[a-z]/', $password)
+            || !preg_match('/[A-Z]/', $password)
+            || !preg_match('/\d/', $password)
+            || !preg_match('/[^A-Za-z0-9]/', $password)) {
+            throw new RuntimeException('ADMIN_PASSWORD não atende à política mínima: 12+ caracteres, maiúscula, minúscula, número e símbolo.');
+        }
     }
 }
